@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "yard-test",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/run-test-server.js"],
+      "port": 3100
+    }
+  ]
+}

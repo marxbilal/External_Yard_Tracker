@@ -1,0 +1,11 @@
+# secrets - never commit
+.env
+
+# local databases and customer data
+data/yard.db
+data/yard.db-*
+data/pg-local/
+data/seed.json
+
+node_modules/
+.netlify/
