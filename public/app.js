@@ -18,13 +18,16 @@ const S = {
 const canEdit = () => S.user && (S.user.role === 'admin' || S.user.role === 'handler');
 const isAdmin = () => S.user && S.user.role === 'admin';
 
-async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && S.user) { S.user = null; renderLogin('Your session has ended. Please sign in again.'); }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
+// All data goes through backend.js, which talks straight to the database (Supabase).
+function sessionEnded() {
+  if (!S.user) return;
+  S.user = null; renderLogin('Your session has ended. Please sign in again.');
 }
+async function api(path, opts) {
+  try { return await yardApi(path, opts); }
+  catch (e) { if (e.status === 401) sessionEnded(); throw e; }
+}
+yardOnSignedOut(sessionEnded);
 let toastTimer;
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -335,7 +338,7 @@ async function renderRecords() {
         ${S.missing ? '<span class="chip">Missing model / colour<button data-act="clear-missing" aria-label="Remove">✕</button></span>' : ''}
         <span class="muted">${fmt(data.total)} units</span><span class="grow"></span>
         ${canEdit() ? '<button class="btn primary" data-act="add">+ Add record</button><button class="btn" data-act="bulk">Bulk paste from Excel</button>' : ''}
-        <a class="btn" href="/api/export.csv?${esc(filterQuery({ q: S.q }))}" style="text-decoration:none">Download CSV</a>
+        <button class="btn" data-act="export">Download CSV</button>
       </div>
       <div class="table-wrap" id="rec-wrap" tabindex="0" aria-label="Records list"><table><thead><tr>
         ${COLS.map(([k, l]) => `<th class="sortable${k === 'days' ? ' num' : ''}" data-sort="${k}">${l}${arrow(k)}</th>`).join('')}<th>Status</th>${canEdit() ? '<th></th>' : ''}
@@ -559,9 +562,21 @@ document.addEventListener('click', async e => {
   if (th) { const k = th.dataset.sort; if (S.sort === k) S.dir = S.dir === 'asc' ? 'desc' : 'asc'; else { S.sort = k; S.dir = 'asc'; } S.page = 1; return renderRecords(); }
   const el = e.target.closest('[data-act]');
   if (!el) return;
-  const act = el.dataset.act, id = Number(el.dataset.id);
+  // record ids are numbers; login ids are text
+  const act = el.dataset.act, uid = el.dataset.id, id = Number(uid);
   try {
-    if (act === 'logout') { await api('/api/logout', { method: 'POST' }); S.user = null; S.filters = newFilters(); S.missing = false; S.q = ''; renderLogin(); }
+    if (act === 'logout') { S.user = null; await api('/api/logout', { method: 'POST' }); S.filters = newFilters(); S.missing = false; S.q = ''; renderLogin(); }
+    else if (act === 'export') {
+      el.disabled = true;
+      try {
+        const { csv } = await api('/api/export?' + filterQuery({ q: S.q }));
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        a.download = `yard-stock-${today()}.csv`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      } finally { el.disabled = false; }
+    }
     else if (act === 'reset-filters') { S.filters = newFilters(); S.missing = false; S.q = ''; S.page = 1; go(S.view); }
     else if (act === 'clear-f') {
       const k = el.dataset.key;
@@ -594,10 +609,10 @@ document.addEventListener('click', async e => {
       if (r && confirm(`Delete ${r.vin} (${r.make || ''} ${r.model || ''}) permanently? This cannot be undone.`)) { await api(`/api/vehicles/${id}`, { method: 'DELETE' }); toast('Record deleted'); keepRecScroll(); await loadOptions(); renderRecords(); }
     }
     else if (act === 'add-user') userForm();
-    else if (act === 'edit-user') userForm(userRows.find(u => u.id === id));
+    else if (act === 'edit-user') userForm(userRows.find(u => u.id === uid));
     else if (act === 'delete-user') {
-      const u = userRows.find(x => x.id === id);
-      if (u && confirm(`Delete the login for ${u.email}?`)) { await api(`/api/users/${id}`, { method: 'DELETE' }); toast('User deleted'); renderUsers(); }
+      const u = userRows.find(x => x.id === uid);
+      if (u && confirm(`Delete the login for ${u.email}?`)) { await api(`/api/users/${uid}`, { method: 'DELETE' }); toast('User deleted'); renderUsers(); }
     }
   } catch (err) { toast(err.message); }
 });

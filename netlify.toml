@@ -1,15 +1,8 @@
-# Netlify: serve the screens from /public and run the API as a function.
+# Netlify only hosts the screens in /public. There is no server code: the pages talk
+# straight to Supabase (public/config.js), which enforces who may see and change what.
 [build]
   publish = "public"
   command = "echo 'no build step'"
-
-[build.environment]
-  NODE_VERSION = "22"
-
-[functions]
-  directory = "netlify/functions"
-  node_bundler = "esbuild"
-  external_node_modules = ["pg"]
 
 [[headers]]
   for = "/*"
@@ -17,4 +10,4 @@
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "DENY"
     Referrer-Policy = "same-origin"
-    Content-Security-Policy = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"
+    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"

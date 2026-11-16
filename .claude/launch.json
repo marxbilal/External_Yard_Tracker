@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "yard-test",
+      "name": "yard-preview",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scripts/run-test-server.js"],
-      "port": 3100
+      "runtimeArgs": ["server.js"],
+      "port": 3000
     }
   ]
 }

@@ -2,58 +2,59 @@
 
 Web app to track every car in the yard: daily record updates, IN/OUT dates, a dashboard, and three access levels.
 
-- **Screens:** `public/` (plain HTML/CSS/JS) - hosted by Netlify.
-- **API:** `src/app.mjs` - runs as a Netlify Function (`netlify/functions/api.mjs`).
-- **Data:** Postgres on Supabase (`supabase/schema.sql`).
+## How it is built
 
-## Deploy: Supabase + Netlify
+The browser talks **straight to the database**. There is no server of our own in between.
 
-### 1. Supabase (database)
+- **Screens:** `public/` (plain HTML/CSS/JS), hosted by Netlify as static files.
+- **Database and logins:** Supabase (Postgres + Supabase Auth). Everything is defined in `supabase/schema.sql`.
+- **Access rules live in the database**, not in the browser:
+  - row level security on `vehicles` decides who may read, add, update and delete;
+  - the screens call the `yt_*` database functions, each of which checks the caller's role;
+  - a trigger checks every write and stamps "updated by", whatever the browser sent.
 
-1. Create a project at supabase.com. Pick a region and note the database password.
-2. In the project, open **Connect** and copy the **Transaction pooler** connection string (port `6543`).
-3. In this folder, copy `.env.example` to `.env` and paste the string as `DATABASE_URL=...`
-   with your password in place of `[YOUR-PASSWORD]`. Never commit or share `.env`.
-4. Create the tables and copy the existing data (vehicles and logins) across:
+`public/config.js` holds the project URL and the **publishable** key. Both are public by design.
+The database password and any `secret` / `service_role` key must never go into `public/`.
+
+## Set up a Supabase project
+
+1. Create the project at supabase.com. Choose a region close to the users (e.g. Southeast Asia - Singapore).
+2. Copy `.env.example` to `.env` and fill in:
+   - `DATABASE_URL` - **Connect** -> **Direct** -> method **Transaction pooler** (port 6543), with the database
+     password in place of `[YOUR-PASSWORD]` (no brackets);
+   - `SUPABASE_URL` - `https://<project-id>.supabase.co`;
+   - `SUPABASE_KEY` - the **publishable** key (`sb_publishable_...`), from **Connect** or Project Settings -> API Keys;
+   - `OLD_DATABASE_URL` - only when moving from another project: that project's connection string.
+3. Run:
 
    ```
-   node scripts/migrate-to-supabase.mjs
+   node scripts/setup-supabase.mjs
    ```
 
-   It only fills empty tables, so it is safe to run again.
+   It creates the tables, rules and functions, copies the vehicles (from `OLD_DATABASE_URL`, else
+   `data/yard.db`), recreates the logins and writes `public/config.js`. It is safe to run again.
+   Logins that come from the old server-based version get a temporary password, listed in
+   `data/temp-passwords.txt` on this PC (never committed).
+4. In Supabase: **Authentication -> Sign In / Providers -> turn off "Allow new users to sign up"**.
+   Logins are only created by an admin inside the app. (A stranger who signed up would see nothing,
+   because they would have no role, but there is no reason to allow it.)
 
-### 2. Netlify (site)
-
-Netlify needs the function, so drag-and-drop upload is not enough. Use the Netlify CLI from this folder:
+## Deploy
 
 ```
-npx netlify-cli login
-npx netlify-cli init          (create a new site; no build command, publish directory "public")
-npx netlify-cli env:set DATABASE_URL "paste-the-same-connection-string"
 npx netlify-cli deploy --prod
 ```
 
-Or connect a **private** Git repository in the Netlify dashboard and add `DATABASE_URL` under
-Site configuration -> Environment variables. `netlify.toml` already holds the build settings.
+Netlify only uploads `public/`. Run it again after any change to the screens or to `public/config.js`.
+A change to `supabase/schema.sql` is applied with `node scripts/setup-supabase.mjs`.
 
-Optional variable: `APP_TZ` (default `Asia/Dubai`) - the time zone used for "days in yard".
-
-For speed, put the Supabase project and the Netlify functions region close to each other.
-
-### 3. After deploying
-
-- Sign in with the same email and password you use locally (logins are migrated).
-- If no login exists yet, the first visitor is asked to create the admin - do that straight away.
-- Add handlers and customers under **Users**.
-
-## Run on this PC
+## Preview on this PC
 
 ```
 node server.js
 ```
 
-- With `DATABASE_URL` in `.env`: uses the same Supabase data as the live site.
-- Without it: uses an offline copy in `data/pg-local` (filled once from `data/yard.db` or `data/seed.json`).
+Opens the same screens on http://localhost:3000, talking to the same Supabase project as the live site.
 
 ## Access levels
 
@@ -63,14 +64,18 @@ node server.js
 | Handler  | all records        | yes | yes    | no     | no           |
 | Customer | only their records | no  | no     | no     | no           |
 
-The customer restriction is enforced on the server. A customer's **Customer Name** must match the
-Customer Name on the vehicle records (e.g. `AWR`).
+A customer's **Customer Name** must match the Customer Name on the vehicle records (e.g. `AWR`; upper/lower
+case does not matter). Admins add, edit and remove logins under **Users**; setting a new password there
+signs that person out everywhere.
+
+"Days in yard" uses the Dubai date. To change the time zone, edit `yt_today()` in `supabase/schema.sql`.
 
 ## Files
 
-- `src/app.mjs` - all API logic (logins, roles, records, dashboard numbers, bulk paste).
-- `src/db-pg.mjs` - Supabase/Postgres connection. `src/db-local.mjs` - offline embedded database.
-- `src/local-server.mjs` - local runner used by `server.js`.
-- `scripts/migrate-to-supabase.mjs` - one-time data move. `scripts/run-test-server.js` - throw-away test copy on port 3100.
-- `legacy/server-sqlite.js` - the original single-PC version (reads `data/yard.db`); fallback only.
-- `data/yard.db`, `data/seed.json` - the original local data. Kept out of Git by `.gitignore`.
+- `public/app.js` - the screens. `public/backend.js` - the data layer: sign-in, input checks, calls to the database functions.
+- `public/config.js` - which Supabase project to use. `public/vendor/supabase.js` - Supabase's browser library (`npm run vendor` refreshes it).
+- `supabase/schema.sql` - tables, access rules, functions.
+- `scripts/setup-supabase.mjs` - prepares a project and moves data into it.
+- `server.js` - local preview. `netlify.toml` - hosting settings and security headers.
+- `legacy/server-sqlite.js` - the original single-PC version (reads `data/yard.db`); kept for reference only.
+- `data/` - the original local data and any temporary-password list. Kept out of Git by `.gitignore`.
