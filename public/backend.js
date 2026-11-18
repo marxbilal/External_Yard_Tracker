@@ -7,7 +7,7 @@
 (function (root) {
   const FIELDS = ['customer_name', 'vin', 'five_digit', 'make', 'model', 'color', 'yard', 'bl', 'in_date', 'out_date'];
   const LABELS = { customer_name: 'Customer Name', vin: 'VIN', five_digit: '5 Digit', make: 'Make', model: 'Model', color: 'Color', yard: 'Yard', bl: 'BL', in_date: 'IN date', out_date: 'OUT date' };
-  const REQUIRED = ['vin', 'five_digit', 'make', 'model', 'yard', 'in_date'];
+  const REQUIRED = ['customer_name', 'vin', 'five_digit', 'make', 'model', 'yard', 'in_date'];
   const UPPER = new Set(['vin', 'five_digit', 'make', 'color', 'yard', 'bl']);
   const AGES = ['0-7 days', '8-15 days', '16-30 days', '31-60 days', 'Over 60 days'];
   const SORTS = ['customer_name', 'vin', 'five_digit', 'make', 'model', 'color', 'yard', 'bl', 'in_date', 'out_date', 'days'];
@@ -85,17 +85,6 @@
     return { u, errors };
   }
 
-  function csvCell(v) {
-    let s = v === null || v === undefined ? '' : String(v);
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }
-  function toCsv(rows) {
-    const lines = [[...FIELDS.map(k => LABELS[k]), 'Days in yard'].map(csvCell).join(',')];
-    for (const r of rows) lines.push([...FIELDS.map(k => r[k]), r.days].map(csvCell).join(','));
-    return '﻿' + lines.join('\r\n');
-  }
-
   // query string from the screens -> filter object for the database functions
   function filtersFrom(q) {
     const f = {};
@@ -144,42 +133,62 @@
     async function importRows(body) {
       const rows = Array.isArray(body.rows) ? body.rows.slice(0, 20000) : [];
       const dryRun = body.dryRun !== false;
-      const out = { created: 0, updated: 0, unchanged: 0, errors: [], dryRun };
+      // New VINs are added under the Customer Name chosen in the upload window (body.customer).
+      // A VIN already in the system gets any cell that differs from what is stored; empty cells keep the stored value.
+      const customer = cleanText('customer_name', body.customer);
+      if (!dryRun && !customer) throw fail(400, 'Fill in the Customer Name first');
+      const out = { created: 0, updated: [], unchanged: [], errors: [], dryRun };
       const vins = [...new Set(rows.map(r => (r && typeof r === 'object' ? cleanText('vin', r.vin) : '')).filter(Boolean))];
       const existing = new Map((vins.length ? await rpc('yt_existing', { vins }) : []).map(r => [r.vin, r]));
       const creates = [], updates = [], seen = new Set();
+      const SHEET_FIELDS = ['make', 'model', 'color', 'yard', 'bl', 'in_date', 'out_date'];
       rows.forEach((row, i) => {
-        const bad = msg => out.errors.push({ row: i + 1, vin: cleanText('vin', row && row.vin), message: msg });
+        const rowNo = (row && Number(row._row)) || i + 1;
+        const bad = msg => out.errors.push({ row: rowNo, vin: cleanText('vin', row && row.vin), message: msg });
         if (!row || typeof row !== 'object') return bad('Unreadable row');
-        const old = existing.get(cleanText('vin', row.vin));
-        const { rec, errors } = normalise(row, old);
+        const input = { vin: row.vin };
+        for (const k of SHEET_FIELDS) if (k in row) input[k] = row[k];
+        const { rec, errors } = normalise(input);
         if (!rec.vin) errors.unshift('VIN is required');
         if (errors.length) return bad(errors.join('. '));
-        if (seen.has(rec.vin)) return bad('VIN appears more than once in this paste');
+        if (seen.has(rec.vin)) return bad('VIN appears more than once in this file');
         seen.add(rec.vin);
+        const old = existing.get(rec.vin);
         if (!old) {
-          if (!rec.five_digit) rec.five_digit = rec.vin.slice(-5);
-          const errs = checkRequired(rec, REQUIRED);
+          rec.customer_name = customer;
+          rec.five_digit = rec.vin.slice(-5);
+          // the customer is checked when uploading; the first check of the file can run before it is chosen
+          const errs = checkRequired(rec, customer ? REQUIRED : REQUIRED.filter(k => k !== 'customer_name'));
           if (rec.in_date && rec.out_date && rec.out_date < rec.in_date) errs.push('OUT date cannot be before IN date');
-          if (errs.length) return bad('New VIN: ' + errs.join('. '));
+          if (errs.length) return bad(errs.join('. '));
           creates.push(dbRow(rec));
           return void out.created++;
         }
-        // existing VIN: only non-empty pasted cells overwrite
-        const changes = {};
-        for (const k of FIELDS) if (k !== 'vin' && rec[k] && rec[k] !== (old[k] || '')) changes[k] = rec[k];
-        const merged = { ...old, ...changes };
+        const changes = [];
+        for (const k of SHEET_FIELDS) {
+          const was = old[k] || '';
+          if (rec[k] && String(rec[k]).toUpperCase() !== String(was).toUpperCase()) changes.push({ field: k, label: LABELS[k], from: was, to: rec[k] });
+        }
+        const merged = { ...old };
+        for (const ch of changes) merged[ch.field] = ch.to;
         if (merged.in_date && merged.out_date && merged.out_date < merged.in_date) return bad('OUT date cannot be before IN date');
-        if (!Object.keys(changes).length) return void out.unchanged++;
+        const shown = { row: rowNo, vin: old.vin, five_digit: old.five_digit, customer_name: old.customer_name };
+        if (!changes.length) return void out.unchanged.push({ ...shown, yard: old.yard, in_date: old.in_date, out_date: old.out_date });
         updates.push({ id: old.id, ...dbRow(merged) });
-        out.updated++;
+        out.updated.push({ ...shown, changes });
       });
-      // sent in batches so a very large paste stays inside the database's time limit
+      // sent in batches so a very large file stays inside the database's time limit
       const BATCH = 4000;
       if (!dryRun) {
-        for (let i = 0; i < creates.length; i += BATCH) await rpc('yt_apply', { creates: creates.slice(i, i + BATCH), updates: [] });
+        let added = 0;
+        for (let i = 0; i < creates.length; i += BATCH) added += (await rpc('yt_apply', { creates: creates.slice(i, i + BATCH), updates: [] })).created;
         for (let i = 0; i < updates.length; i += BATCH) await rpc('yt_apply', { creates: [], updates: updates.slice(i, i + BATCH) });
+        out.created = added;  // a VIN someone else added in the meantime is skipped, not duplicated
       }
+      out.updatedTotal = out.updated.length;
+      out.unchangedTotal = out.unchanged.length;
+      out.updated = out.updated.slice(0, 1000);
+      out.unchanged = out.unchanged.slice(0, 1000);
       out.errors = out.errors.slice(0, 200);
       return out;
     }
@@ -220,22 +229,45 @@
           sort: SORTS.includes(q.get('sort')) ? q.get('sort') : 'in_date', dir: q.get('dir') === 'asc' ? 'asc' : 'desc',
         });
       }
-      if (p === '/api/export' && m === 'GET') return { csv: toCsv(await rpc('yt_export', { f: filtersFrom(q) })) };
+      if (p === '/api/export' && m === 'GET') return { rows: await rpc('yt_export', { f: filtersFrom(q) }) };
 
       if (p === '/api/vehicles' && m === 'POST') {
         const { rec, errors } = normalise(body);
+        rec.five_digit = (rec.vin || '').slice(-5);  // always taken from the VIN
         errors.push(...checkRequired(rec, REQUIRED));
         if (rec.in_date && rec.out_date && rec.out_date < rec.in_date) errors.push('OUT date cannot be before IN date');
         if (errors.length) throw fail(400, errors.join('. '));
         return rpc('yt_vehicle_add', { rec: dbRow(rec) });
       }
       if (p === '/api/vehicles/import' && m === 'POST') return importRows(body);
+      // Add / Update form: is this VIN already in the system?
+      if (p === '/api/vehicles/find-vin' && m === 'POST') {
+        const vin = cleanText('vin', body.vin);
+        return { rows: /^[A-Z0-9]{5,20}$/.test(vin) ? await rpc('yt_existing', { vins: [vin] }) : [] };
+      }
+      // bulk update: look up by 5 Digit, then set a new Yard and/or OUT date on the chosen records
+      if (p === '/api/vehicles/find-five' && m === 'POST') {
+        const fives = [...new Set((Array.isArray(body.fives) ? body.fives : []).map(f => cleanText('five_digit', f)).filter(Boolean))].slice(0, 2000);
+        return { rows: fives.length ? await rpc('yt_by_five', { fives }) : [] };
+      }
+      if (p === '/api/vehicles/bulk-update' && m === 'POST') {
+        const ids = (Array.isArray(body.ids) ? body.ids : []).map(Number).filter(n => Number.isInteger(n) && n > 0).slice(0, 5000);
+        if (!ids.length) throw fail(400, 'Select at least one record');
+        const yard = cleanText('yard', body.yard);
+        const out = parseDate(body.out_date);
+        if (out === undefined) throw fail(400, 'OUT date is not a valid date');
+        if (!yard && !out) throw fail(400, 'Enter a new Yard, an OUT date, or both');
+        return rpc('yt_bulk_update', { ids, p_yard: yard, p_out: out });
+      }
       if ((mm = p.match(/^\/api\/vehicles\/(\d{1,9})$/))) {
         const id = Number(mm[1]);
         if (m === 'PUT') {
           const old = await rpc('yt_vehicle', { p_id: id });
           if (!old) throw fail(404, 'Record not found');
           const { rec, errors } = normalise(body, old);
+          // 5 Digit follows the VIN: a new VIN gives a new 5 Digit, otherwise the stored one stays
+          delete rec.five_digit;
+          if (rec.vin && rec.vin !== old.vin) rec.five_digit = rec.vin.slice(-5);
           const merged = { ...old, ...rec };
           // a mandatory field may not be left empty (old Excel rows with a blank model can stay blank)
           errors.push(...checkRequired(merged, REQUIRED.filter(k => old[k] || k !== 'model')));

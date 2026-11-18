@@ -3,6 +3,6 @@
 // own access rules are what protect the data. Never put the database password or a
 // "secret" / "service_role" key in this file.
 window.YARD_CONFIG = {
-  SUPABASE_URL: "",
-  SUPABASE_KEY: ""
+  SUPABASE_URL: "https://bpzxvvbkbpfwgeqrzlcq.supabase.co",
+  SUPABASE_KEY: "sb_publishable_68pFVAlXydQQwEll14ZgRA_hYP0RRVi"
 };

@@ -108,9 +108,12 @@ begin
       raise exception 'VIN must be 5-20 letters/digits with no spaces';
     end if;
   end if;
-  if tg_op = 'INSERT' and (coalesce(new.five_digit, '') = '' or coalesce(new.make, '') = '' or coalesce(new.model, '') = ''
-      or coalesce(new.yard, '') = '' or new.in_date is null) then
-    raise exception 'VIN, 5 Digit, Make, Model, Yard and IN date are required';
+  if tg_op = 'INSERT' and (coalesce(new.customer_name, '') = '' or coalesce(new.five_digit, '') = '' or coalesce(new.make, '') = ''
+      or coalesce(new.model, '') = '' or coalesce(new.yard, '') = '' or new.in_date is null) then
+    raise exception 'Customer Name, VIN, 5 Digit, Make, Model, Yard and IN date are required';
+  end if;
+  if tg_op = 'UPDATE' and coalesce(old.customer_name, '') <> '' and coalesce(new.customer_name, '') = '' then
+    raise exception 'Customer Name is required';
   end if;
   if new.in_date is not null and new.out_date is not null and new.out_date < new.in_date then
     raise exception 'OUT date cannot be before IN date';
@@ -138,11 +141,12 @@ language sql stable as $$
   where (not coalesce(f ? 'customer', false) or (select public.yt_role()) = 'customer'
          or (f -> 'customer') ? lower(coalesce(v.customer_name, '')))
     and ('make'  = any (skip) or not coalesce(f ? 'make',  false) or (f -> 'make')  ? coalesce(nullif(v.make,  ''), '(Blank)'))
-    and ('model' = any (skip) or not coalesce(f ? 'model', false) or (f -> 'model') ? coalesce(nullif(v.model, ''), '(Blank)'))
+    and ('model' = any (skip) or not coalesce(f ? 'model', false) or (f -> 'model') ? coalesce(nullif(v.model, ''), 'Model not given'))
     and ('yard'  = any (skip) or not coalesce(f ? 'yard',  false) or (f -> 'yard')  ? coalesce(nullif(v.yard,  ''), '(Blank)'))
     and ('color' = any (skip) or not coalesce(f ? 'color', false) or (f -> 'color') ? coalesce(nullif(v.color, ''), '(Blank)'))
-    and (not (coalesce((f -> 'status') ? 'in', false) and not coalesce((f -> 'status') ? 'out', false)) or v.out_date is null)
-    and (not (coalesce((f -> 'status') ? 'out', false) and not coalesce((f -> 'status') ? 'in', false)) or v.out_date is not null)
+    and ('status' = any (skip) or (
+             (not (coalesce((f -> 'status') ? 'in', false) and not coalesce((f -> 'status') ? 'out', false)) or v.out_date is null)
+         and (not (coalesce((f -> 'status') ? 'out', false) and not coalesce((f -> 'status') ? 'in', false)) or v.out_date is not null)))
     and ('in' = any (skip) or (((f ->> 'in_from') is null or v.in_date >= (f ->> 'in_from')::date)
                            and ((f ->> 'in_to')   is null or v.in_date <= (f ->> 'in_to')::date)))
     and ('out' = any (skip) or (((f ->> 'out_from') is null or v.out_date >= (f ->> 'out_from')::date)
@@ -190,15 +194,24 @@ language sql stable as $$
         'oldest_days', max(coalesce(out_date, public.yt_today()) - in_date) filter (where out_date is null),
         'missing', count(*) filter (where coalesce(model, '') = '' or coalesce(color, '') = ''))
       from public.yt_rows(f)),
+    'byStatus', (select jsonb_build_object('in_yard', count(*) filter (where out_date is null), 'outbound', count(*) filter (where out_date is not null))
+      from public.yt_rows(f, '{status}')),
     'ageing', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value)), '[]'::jsonb)
       from (select public.yt_bucket(public.yt_today() - in_date) as name, count(*) as value
             from public.yt_rows(f, '{age}') where out_date is null and in_date is not null group by 1) t),
-    'byMake', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value) order by value desc, name), '[]'::jsonb)
-      from (select coalesce(nullif(make, ''), '(Blank)') as name, count(*) as value from public.yt_rows(f, '{make}') group by 1) t),
-    'byModel', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value) order by value desc, name), '[]'::jsonb)
-      from (select coalesce(nullif(model, ''), '(Blank)') as name, count(*) as value from public.yt_rows(f, '{model}') group by 1) t),
-    'byYard', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value) order by value desc, name), '[]'::jsonb)
-      from (select coalesce(nullif(yard, ''), '(Blank)') as name, count(*) as value from public.yt_rows(f, '{yard}') group by 1) t),
+    -- Brand and Yard also give the IN (still in yard) and OUT (OUTBOUND) counts, for the IN / OUT switch on their charts
+    'byMake', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value, 'in', n_in, 'out', n_out) order by value desc, name), '[]'::jsonb)
+      from (select coalesce(nullif(make, ''), '(Blank)') as name, count(*) as value,
+                   count(*) filter (where out_date is null) as n_in, count(*) filter (where out_date is not null) as n_out
+            from public.yt_rows(f, '{make}') group by 1) t),
+    'byModel', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value, 'in', n_in, 'out', n_out) order by value desc, name), '[]'::jsonb)
+      from (select coalesce(nullif(model, ''), 'Model not given') as name, count(*) as value,
+                   count(*) filter (where out_date is null) as n_in, count(*) filter (where out_date is not null) as n_out
+            from public.yt_rows(f, '{model}') group by 1) t),
+    'byYard', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value, 'in', n_in, 'out', n_out) order by value desc, name), '[]'::jsonb)
+      from (select coalesce(nullif(yard, ''), '(Blank)') as name, count(*) as value,
+                   count(*) filter (where out_date is null) as n_in, count(*) filter (where out_date is not null) as n_out
+            from public.yt_rows(f, '{yard}') group by 1) t),
     'byColor', (select coalesce(jsonb_agg(jsonb_build_object('name', name, 'value', value) order by value desc, name), '[]'::jsonb)
       from (select coalesce(nullif(color, ''), '(Blank)') as name, count(*) as value from public.yt_rows(f, '{color}') group by 1) t),
     'dailyIn', (select coalesce(jsonb_agg(jsonb_build_object('d', d, 'n', n) order by d), '[]'::jsonb)
@@ -324,6 +337,32 @@ begin
   where v.id = x.id;
   get diagnostics n_upd = row_count;
   return jsonb_build_object('created', n_new, 'updated', n_upd);
+end $$;
+
+-- bulk update, step 1: the records for a list of 5 Digit numbers
+create or replace function public.yt_by_five(fives jsonb) returns jsonb
+language sql stable as $$
+  select coalesce(jsonb_agg(public.yt_row(v) order by v.five_digit, v.vin), '[]'::jsonb)
+  from public.vehicles v where v.five_digit in (select upper(trim(jsonb_array_elements_text(fives))))
+$$;
+
+-- bulk update, step 2: a new Yard and/or OUT date for the chosen records (empty = keep what is there)
+create or replace function public.yt_bulk_update(ids jsonb, p_yard text, p_out date) returns jsonb
+language plpgsql as $$
+declare n integer; bad text;
+begin
+  perform public.yt_need('admin', 'handler');
+  p_yard := nullif(trim(coalesce(p_yard, '')), '');
+  if p_yard is null and p_out is null then raise exception 'Enter a new Yard or an OUT date'; end if;
+  if p_out is not null then
+    select string_agg(coalesce(five_digit, vin), ', ' order by five_digit) into bad from public.vehicles
+      where id in (select (jsonb_array_elements_text(ids))::integer) and in_date > p_out;
+    if bad is not null then raise exception 'OUT date cannot be before IN date (%)', bad; end if;
+  end if;
+  update public.vehicles set yard = coalesce(p_yard, yard), out_date = coalesce(p_out, out_date)
+  where id in (select (jsonb_array_elements_text(ids))::integer);
+  get diagnostics n = row_count;
+  return jsonb_build_object('updated', n);
 end $$;
 
 -- ============================================================ logins (admin only)
@@ -458,7 +497,7 @@ grant execute on function
   public.yt_options(), public.yt_stats(jsonb), public.yt_vehicles(jsonb, integer, integer, text, text),
   public.yt_export(jsonb), public.yt_vehicle(integer), public.yt_existing(jsonb),
   public.yt_vehicle_add(jsonb), public.yt_vehicle_update(integer, jsonb), public.yt_vehicle_delete(integer),
-  public.yt_apply(jsonb, jsonb),
+  public.yt_apply(jsonb, jsonb), public.yt_by_five(jsonb), public.yt_bulk_update(jsonb, text, date),
   public.yt_users(), public.yt_user_create(jsonb), public.yt_user_update(uuid, jsonb), public.yt_user_delete(uuid)
 to authenticated;
 

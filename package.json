@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node scripts/setup-supabase.mjs",
+    "deploy": "npx netlify-cli deploy --prod --dir public",
     "vendor": "node -e \"require('fs').copyFileSync('node_modules/@supabase/supabase-js/dist/umd/supabase.js','public/vendor/supabase.js')\""
   },
   "engines": {
