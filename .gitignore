@@ -8,5 +8,8 @@ data/pg-local/
 data/seed.json
 data/temp-passwords.txt
 
+# exported Claude chat logs (contain account emails and project details)
+chat-history/
+
 node_modules/
 .netlify/

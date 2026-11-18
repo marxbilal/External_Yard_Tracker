@@ -618,9 +618,11 @@ function bulkUpdateModal() {
     try {
       const { rows } = await api('/api/vehicles/find-five', { method: 'POST', body: { fives } });
       if (my !== seq) return;  // the numbers changed while this was loading
-      found = rows.sort((a, b) => fives.indexOf(a.five_digit) - fives.indexOf(b.five_digit));
-      const have = new Set(found.map(r => r.five_digit)), missing = fives.filter(f => !have.has(f));
-      const twice = fives.filter(f => found.filter(r => r.five_digit === f).length > 1);
+      // the number each record was found by: its 5 Digit, or the last 5 characters of its VIN (older records such as C31068)
+      const matchOf = r => fives.find(f => f === r.five_digit) || fives.find(f => (r.vin || '').endsWith(f)) || r.five_digit;
+      found = rows.sort((a, b) => fives.indexOf(matchOf(a)) - fives.indexOf(matchOf(b)) || String(a.vin).localeCompare(String(b.vin)));
+      const have = new Set(found.map(matchOf)), missing = fives.filter(f => !have.has(f));
+      const twice = fives.filter(f => found.filter(r => matchOf(r) === f).length > 1);
       const already = found.filter(r => r.out_date);
       const notes = `${missing.length ? `<div class="err" style="margin-top:8px">Not found: ${missing.map(esc).join(', ')}</div>` : ''}
         ${already.length ? `<div class="warnbox" style="margin-top:8px"><b>OUT date already exists</b> for ${already.map(r => `${esc(r.five_digit)} (${fmtDate(r.out_date)})`).join(', ')}.

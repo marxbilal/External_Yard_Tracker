@@ -339,11 +339,14 @@ begin
   return jsonb_build_object('created', n_new, 'updated', n_upd);
 end $$;
 
--- bulk update, step 1: the records for a list of 5 Digit numbers
+-- bulk update, step 1: the records for a list of 5 Digit numbers. A record matches on its 5 Digit or on
+-- the last 5 characters of its VIN, so older records whose 5 Digit has an extra character (C31068) are found too.
 create or replace function public.yt_by_five(fives jsonb) returns jsonb
 language sql stable as $$
+  with f as (select distinct upper(trim(x)) as t from jsonb_array_elements_text(fives) x)
   select coalesce(jsonb_agg(public.yt_row(v) order by v.five_digit, v.vin), '[]'::jsonb)
-  from public.vehicles v where v.five_digit in (select upper(trim(jsonb_array_elements_text(fives))))
+  from public.vehicles v
+  where v.five_digit in (select t from f) or right(v.vin, 5) in (select t from f)
 $$;
 
 -- bulk update, step 2: a new Yard and/or OUT date for the chosen records (empty = keep what is there)
