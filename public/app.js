@@ -487,7 +487,7 @@ function vehicleForm(rec) {
 // ---- upload Excel sheet
 // Columns can be in any order. A heading is recognised by the words in it, so "VIN", "Chassis No." and
 // "VIN / Chassis No." are all the VIN; "Make", "Brand" and "Make / Brand" are all the Make; and so on.
-const MANDATORY = [['vin', 'VIN'], ['make', 'Make'], ['model', 'Model'], ['yard', 'Yard'], ['in_date', 'IN Date'], ['out_date', 'OUT Date']];
+const MANDATORY = [['vin', 'VIN'], ['make', 'Make'], ['model', 'Model'], ['yard', 'Yard'], ['in_date', 'IN Date']];
 const TEMPLATE_HEAD = ['VIN', 'Make', 'Model', 'Yard', 'IN Date', 'OUT Date', 'Color', 'BL'];
 function headKey(h) {
   const s = String(h).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -676,8 +676,8 @@ function uploadModal() {
         <input id="up-cust" list="dl-up-cust" autocomplete="off" placeholder="Choose or type the customer for this file">
         <datalist id="dl-up-cust">${S.options.customers.map(v => `<option value="${esc(v)}">`).join('')}</datalist></div>
       <p class="hint">The first row of the sheet must be the column headings, in any order.<br>
-        <b>Mandatory columns:</b> VIN (or Chassis No.), Make (or Brand), Model, Yard, IN Date, OUT Date.<br>
-        <b>Optional columns:</b> Color, BL. An OUT Date cell can be left empty for a vehicle still in the yard.<br>
+        <b>Mandatory columns:</b> VIN (or Chassis No.), Make (or Brand), Model, Yard, IN Date.<br>
+        <b>Optional columns:</b> OUT Date, Color, BL.<br>
         5 Digit is not needed - it is taken automatically from the last 5 characters of the VIN.</p>
       <p class="hint">New VINs are added under the Customer Name above. For a VIN already in the system, any cell that differs
         (for example a new OUT date or Yard) is updated; empty cells keep the current value.
